@@ -5,7 +5,7 @@ import {
   getAllUsers,
   getMe,
   logoutUser,
-} from "../controllers/user.controllers.js";
+} from "../controllers/user.controller.js";
 import { isLoggedIn } from "../middleware/auth.middleware.js";
 import validate from "../middleware/validate.middleware.js";
 import {

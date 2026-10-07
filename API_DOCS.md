@@ -138,7 +138,7 @@ Liveness probe to check if the server is running.
 
 All user endpoints are prefixed with `/user`.
 
-> **Note:** The user router is currently commented out in `app.js`. Uncomment `app.use("/api/v1/user", userRouter)` to activate these routes.
+The user router is mounted in `app.js` with `app.use("/api/v1/user", userRouter)`.
 
 ---
 
@@ -393,4 +393,3 @@ Default port: **`8000`** (configurable via the `PORT` env variable).
 | `MONGODB_URI` | MongoDB connection string |
 | `JWT_SECRET` | Secret key for signing JWTs |
 | `NODE_ENV` | `development` or `production` (affects cookie `secure` and `sameSite` flags) |
-
