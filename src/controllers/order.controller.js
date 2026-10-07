@@ -289,3 +289,67 @@ export const getOrderById = asyncHandler(async (req, res) => {
     ),
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/orders
+// ─────────────────────────────────────────────────────────────────────────────
+export const getMyOrders = asyncHandler(async (req, res) => {
+  // ── Pagination (optional query params: ?page=1&limit=10) ─────────────────
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+  const skip = (page - 1) * limit;
+
+  // ── Filter: only this user's orders ──────────────────────────────────────
+  // The { user: req.user._id } filter is the ownership boundary —
+  // no user can ever see another user's orders regardless of query params.
+  const filter = { user: req.user._id };
+
+  // Run count and data fetch in parallel for efficiency
+  const [total, orders] = await Promise.all([
+    Order.countDocuments(filter),
+    Order.find(filter)
+      .sort({ createdAt: -1 }) // newest first
+      .skip(skip)
+      .limit(limit)
+      .populate({
+        path: "items",
+        select: "product quantity priceAtPurchase -_id",
+        populate: {
+          path: "product",
+          select: "name price -_id",
+        },
+      }),
+  ]);
+
+  const totalPages = Math.ceil(total / limit);
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        orders: orders.map((order) => ({
+          orderId: order._id,
+          status: order.status,
+          totalAmount: order.totalAmount,
+          items: order.items.map((item) => ({
+            productName: item.product?.name,
+            quantity: item.quantity,
+            priceAtPurchase: item.priceAtPurchase,
+            subtotal: item.priceAtPurchase * item.quantity,
+          })),
+          createdAt: order.createdAt,
+          updatedAt: order.updatedAt,
+        })),
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+        },
+      },
+      "Orders fetched successfully",
+    ),
+  );
+});
