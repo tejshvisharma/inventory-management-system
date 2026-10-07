@@ -7,16 +7,8 @@ import Order from "../models/Order.js";
 import OrderItem from "../models/OrderItem.js";
 import IdempotencyKey from "../models/IdempotencyKey.js";
 
-// Idempotency keys expire after 24 hours (matches JWT lifetime)
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Normalize items array: merge duplicate productIds by summing their
- * quantities so a single atomic decrement covers the full requested amount.
- *
- * e.g.  [{productId:"A", qty:1}, {productId:"A", qty:2}]
- *       → [{productId:"A", quantity:3}]
- */
 function normalizeItems(items) {
   const map = new Map();
 
@@ -32,11 +24,7 @@ function normalizeItems(items) {
   return Array.from(map.values());
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/v1/orders
-// ─────────────────────────────────────────────────────────────────────────────
 export const createOrder = asyncHandler(async (req, res) => {
-  // ── Step 1: Validate the Idempotency-Key header ──────────────────────────
   const idempotencyKey = req.headers["idempotency-key"]?.trim();
 
   if (!idempotencyKey) {
@@ -52,45 +40,24 @@ export const createOrder = asyncHandler(async (req, res) => {
 
   const userId = req.user._id;
 
-  // ── Step 2: Return cached response for duplicate/retried requests ─────────
-  // This check happens OUTSIDE the transaction so it short-circuits cheaply.
   const existingKey = await IdempotencyKey.findOne({
     key: idempotencyKey,
     userId,
   });
 
   if (existingKey) {
-    // Replay the exact same response that the original request produced.
     return res.status(existingKey.statusCode).json(existingKey.response);
   }
 
-  // ── Step 3: Normalize items (deduplicate productIds) ──────────────────────
   const normalizedItems = normalizeItems(req.body.items);
-
-  // ── Step 4: Open a MongoDB multi-document transaction ─────────────────────
   const session = await mongoose.startSession();
 
   try {
     session.startTransaction();
 
-    // ── Step 5: Atomic stock decrement — one product at a time ──────────────
-    // We intentionally process sequentially (not with Promise.all) because
-    // concurrent operations on the same session can cause driver-level issues.
     const lineItems = [];
 
     for (const { productId, quantity } of normalizedItems) {
-      /*
-       * ATOMIC FILTER + UPDATE
-       * ┌─────────────────────────────────────────────┐
-       * │ filter: { _id: productId, stock: {$gte: q} }│
-       * │ update: { $inc: { stock: -q } }             │
-       * └─────────────────────────────────────────────┘
-       * If the filter matches → stock is decremented and the updated doc is
-       * returned.  If no doc is returned → either the product doesn't exist
-       * OR stock < quantity.  We do a follow-up read to tell the client which.
-       *
-       * This single atomic operation is the key anti-overselling guarantee.
-       */
       const updated = await Product.findOneAndUpdate(
         { _id: productId, stock: { $gte: quantity } },
         { $inc: { stock: -quantity } },
@@ -98,7 +65,6 @@ export const createOrder = asyncHandler(async (req, res) => {
       );
 
       if (!updated) {
-        // Disambiguate: is it missing or just low stock?
         const exists = await Product.findById(productId)
           .session(session)
           .lean();
@@ -118,24 +84,18 @@ export const createOrder = asyncHandler(async (req, res) => {
         productId: updated._id,
         productName: updated.name,
         quantity,
-        // Snapshot the DB price — never use a client-supplied value
         priceAtPurchase: updated.price,
         subtotal: updated.price * quantity,
       });
     }
 
-    // ── Step 6: Calculate server-side total ───────────────────────────────
     const totalAmount = lineItems.reduce(
       (acc, item) => acc + item.subtotal,
       0,
     );
 
-    // ── Step 7: Pre-generate Order _id to break the chicken-and-egg cycle ─
-    // OrderItems need an orderId; Order needs orderItem _ids.
-    // We resolve this by pre-allocating the Order _id before creating either.
     const orderId = new mongoose.Types.ObjectId();
 
-    // ── Step 8: Bulk-create OrderItems ────────────────────────────────────
     const orderItems = await OrderItem.insertMany(
       lineItems.map((item) => ({
         order: orderId,
@@ -148,8 +108,6 @@ export const createOrder = asyncHandler(async (req, res) => {
 
     const orderItemIds = orderItems.map((oi) => oi._id);
 
-    // ── Step 9: Create the Order document ────────────────────────────────
-    // Order.create() inside a transaction requires the array form.
     const [order] = await Order.create(
       [
         {
@@ -162,7 +120,6 @@ export const createOrder = asyncHandler(async (req, res) => {
       { session },
     );
 
-    // ── Step 10: Build the response payload ───────────────────────────────
     const responsePayload = new ApiResponse(
       201,
       {
@@ -181,13 +138,6 @@ export const createOrder = asyncHandler(async (req, res) => {
       "Order placed successfully",
     );
 
-    // ── Step 11: Persist the IdempotencyKey inside the transaction ────────
-    // Saving inside the transaction means if anything above rolled back, the
-    // key is never stored — preventing a ghost record for a failed order.
-    //
-    // The compound unique index on (key, userId) is the last safety net:
-    // if two identical requests race past Step 2, the second insert will
-    // throw a duplicate-key error (code 11000), aborting its transaction.
     await IdempotencyKey.create(
       [
         {
@@ -201,17 +151,12 @@ export const createOrder = asyncHandler(async (req, res) => {
       { session },
     );
 
-    // ── Step 12: Commit — all-or-nothing ─────────────────────────────────
     await session.commitTransaction();
 
     return res.status(201).json(responsePayload);
   } catch (error) {
     await session.abortTransaction();
 
-    // MongoDB can reject the losing transaction with a write conflict before
-    // the conditional stock update gets a chance to observe the committed
-    // winner. Report that contention as the same conflict clients receive
-    // when stock is already insufficient.
     if (error.code === 112) {
       throw new ApiError(
         409,
@@ -219,11 +164,6 @@ export const createOrder = asyncHandler(async (req, res) => {
       );
     }
 
-    // ── Race-condition guard ───────────────────────────────────────────────
-    // Two requests with the same idempotency key both passed Step 2 (the
-    // pre-transaction check) and raced into the transaction.  The duplicate-key
-    // error from the idempotency insert tells us the first request won.
-    // We replay the winning response rather than surfacing a confusing 500.
     if (error.code === 11000) {
       const cached = await IdempotencyKey.findOne({
         key: idempotencyKey,
@@ -236,34 +176,17 @@ export const createOrder = asyncHandler(async (req, res) => {
 
     throw error;
   } finally {
-    // Always release the session, even on success
     session.endSession();
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/v1/orders/:id
-// ─────────────────────────────────────────────────────────────────────────────
 export const getOrderById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  // ── 1. Validate the route param is a well-formed ObjectId ────────────────
-  // Reject early so MongoDB never receives a malformed query.
   if (!mongoose.isValidObjectId(id)) {
     throw new ApiError(400, "Invalid order id");
   }
 
-  // ── 2. Ownership-enforcing compound query ─────────────────────────────────
-  // Both conditions must match simultaneously in the SAME find call.
-  //
-  //   { _id: id, user: req.user._id }
-  //
-  // This means:
-  //   • If the order doesn't exist            → null → 404
-  //   • If the order belongs to someone else  → null → 404
-  //
-  // The caller receives an identical 404 in both cases — no information
-  // leakage about whether the order ID is valid for another user.
   const order = await Order.findOne({
     _id: id,
     user: req.user._id,
@@ -301,25 +224,17 @@ export const getOrderById = asyncHandler(async (req, res) => {
   );
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/v1/orders
-// ─────────────────────────────────────────────────────────────────────────────
 export const getMyOrders = asyncHandler(async (req, res) => {
-  // ── Pagination (optional query params: ?page=1&limit=10) ─────────────────
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
   const skip = (page - 1) * limit;
 
-  // ── Filter: only this user's orders ──────────────────────────────────────
-  // The { user: req.user._id } filter is the ownership boundary —
-  // no user can ever see another user's orders regardless of query params.
   const filter = { user: req.user._id };
 
-  // Run count and data fetch in parallel for efficiency
   const [total, orders] = await Promise.all([
     Order.countDocuments(filter),
     Order.find(filter)
-      .sort({ createdAt: -1 }) // newest first
+      .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .populate({

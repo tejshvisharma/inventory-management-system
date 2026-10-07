@@ -22,8 +22,6 @@ const orderItemSchema = new mongoose.Schema(
         message: "Quantity must be an integer",
       },
     },
-    // Snapshot of the price at the moment of purchase.
-    // Decoupled from Product.price so future price changes don't mutate history.
     priceAtPurchase: {
       type: Number,
       required: true,
@@ -35,4 +33,3 @@ const orderItemSchema = new mongoose.Schema(
 
 const OrderItem = mongoose.model("OrderItem", orderItemSchema);
 export default OrderItem;
-
