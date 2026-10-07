@@ -1,7 +1,7 @@
 # Inventory Order API — Documentation
 
-> **Base URL:** `http://localhost:8000/api/v1`  
-> **Version:** 1.0.0  
+> **Base URL:** `http://localhost:8000/api/v1`
+> **Version:** 1.0.0
 > **Stack:** Node.js · Express 5 · MongoDB (Mongoose) · JWT Auth
 
 ---
@@ -15,8 +15,9 @@
 - [Roles & Permissions](#roles--permissions)
 - [Endpoints](#endpoints)
   - [Health](#health)
-  - [Products](#products)
   - [Users](#users)
+  - [Products](#products)
+  - [Orders](#orders)
 - [Middleware Reference](#middleware-reference)
 - [Data Models](#data-models)
 - [Running the Server](#running-the-server)
@@ -25,32 +26,31 @@
 
 ## Overview
 
-This is a RESTful API for an Inventory & Order management system. The current implementation includes:
+RESTful API for an Inventory & Order management system. Fully implemented modules:
 
-- **Health check** — server liveness probe
-- **User management** — register, login, logout, profile, admin user listing
-- **Product management** — public product listing with admin-only create and update
-
-> **Note:** `Order`, `OrderItem`, and `IdempotencyKey` models are scaffolded but not yet implemented.
+| Module | Status | Prefix |
+|---|---|---|
+| Health check | ✅ Live | `/api/v1/health` |
+| User management | ✅ Live | `/api/v1/user` |
+| Product management | ✅ Live | `/api/v1/products` |
+| Order management | ✅ Live | `/api/v1/orders` |
 
 ---
 
 ## Authentication
 
-The API uses **JWT (JSON Web Token)** for authentication.
-
-### How to Authenticate
+The API uses **JWT (JSON Web Token)** for stateless authentication.
 
 Tokens are issued on **register** and **login** and are valid for **24 hours**.
 
-You can pass the token in either of two ways:
+Pass the token in **either** of these ways:
 
 | Method | Details |
 |---|---|
-| **Cookie** | `accessToken` HTTP-only cookie (set automatically by the server) |
-| **Authorization header** | JWT value supplied in the Authorization header |
+| **HTTP-only Cookie** | `accessToken` cookie — set automatically by the server on login/register |
+| **Authorization Header** | `Authorization: Bearer <token>` |
 
-Protected routes return `401 Unauthorized` when the JWT is missing, invalid, or expired.
+Protected routes return `401 Unauthorized` when the token is absent, invalid, or expired.
 
 ---
 
@@ -89,18 +89,18 @@ All error responses follow this envelope:
 | `success` | `boolean` | Always `false` for errors |
 | `statusCode` | `number` | HTTP status code |
 | `message` | `string` | Error summary |
-| `errors` | `array` | Field-level validation errors (may be empty `[]`) |
+| `errors` | `array` | Field-level validation errors (empty `[]` for non-validation errors) |
 
-### Common Error Codes
+### Error Code Reference
 
 | Code | Meaning |
 |---|---|
-| `400` | Bad Request — missing or malformed body fields |
-| `401` | Unauthorized — no token or invalid/expired token |
-| `403` | Forbidden — authenticated but insufficient role |
-| `404` | Not Found — route does not exist |
-| `409` | Conflict — resource already exists |
-| `422` | Unprocessable Entity — validation failed |
+| `400` | Bad Request — missing header, malformed body |
+| `401` | Unauthorized — no token, invalid or expired token |
+| `403` | Forbidden — insufficient role |
+| `404` | Not Found — resource or route doesn't exist |
+| `409` | Conflict — duplicate resource or insufficient stock |
+| `422` | Unprocessable Entity — body failed validation rules |
 | `500` | Internal Server Error |
 
 ---
@@ -120,7 +120,7 @@ All error responses follow this envelope:
 
 #### `GET /health`
 
-Liveness probe to check if the server is running.
+Liveness probe — confirms the server is up.
 
 **Auth Required:** No
 
@@ -136,131 +136,9 @@ Liveness probe to check if the server is running.
 
 ---
 
-### Products
-
-All product endpoints are prefixed with `/products`.
-
-#### `POST /products`
-
-Creates a product.
-
-**Auth Required:** Yes — admin only
-
-**Request Body** (`application/json`)
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | `string` | ✅ | Product name |
-| `price` | `number` | ✅ | Non-negative product price |
-| `stock` | `integer` | ✅ | Non-negative inventory quantity |
-
-```json
-{
-  "name": "Keyboard",
-  "price": 49.99,
-  "stock": 25
-}
-```
-
-**Response `201 Created`**
-
-```json
-{
-  "success": true,
-  "statusCode": 201,
-  "message": "Product created successfully",
-  "data": {
-    "id": "64f1a2b3c4d5e6f7a8b9c0d1",
-    "name": "Keyboard",
-    "price": 49.99,
-    "stock": 25
-  }
-}
-```
-
-**Error Responses**
-
-| Status | Message |
-|---|---|
-| `401` | No token or invalid/expired token |
-| `403` | Forbidden: admin access only |
-| `422` | Validation error (name, price, or stock) |
-
-#### `GET /products`
-
-Returns all products. Authentication is not required.
-
-**Response `200 OK`**
-
-```json
-{
-  "success": true,
-  "statusCode": 200,
-  "message": "Products fetched successfully",
-  "data": [
-    {
-      "id": "64f1a2b3c4d5e6f7a8b9c0d1",
-      "name": "Keyboard",
-      "price": 49.99,
-      "stock": 25
-    }
-  ]
-}
-```
-
-#### `PATCH /products/:id`
-
-Updates one or more product fields.
-
-**Auth Required:** Yes — admin only
-
-The request body may contain `name`, `price`, and/or `stock`. At least one
-field is required.
-
-Product responses use the following shape:
-
-```json
-{
-  "id": "64f1a2b3c4d5e6f7a8b9c0d1",
-  "name": "Keyboard",
-  "price": 49.99,
-  "stock": 25
-}
-```
-
-**Response `200 OK`**
-
-```json
-{
-  "success": true,
-  "statusCode": 200,
-  "message": "Product updated successfully",
-  "data": {
-    "id": "64f1a2b3c4d5e6f7a8b9c0d1",
-    "name": "Keyboard",
-    "price": 44.99,
-    "stock": 30
-  }
-}
-```
-
-**Error Responses**
-
-| Status | Message |
-|---|---|
-| `400` | Invalid product id |
-| `401` | No token or invalid/expired token |
-| `403` | Forbidden: admin access only |
-| `404` | Product not found |
-| `422` | Validation error; at least one product field is required |
-
----
-
 ### Users
 
 All user endpoints are prefixed with `/user`.
-
-The user router is mounted in `app.js` with `app.use("/api/v1/user", userRouter)`.
 
 ---
 
@@ -276,7 +154,7 @@ Creates a new user account and returns a JWT access token.
 |---|---|---|---|
 | `username` | `string` | ✅ | Unique username (also accepted as `name`) |
 | `email` | `string` | ✅ | Unique email address |
-| `password` | `string` | ✅ | Plain-text password (bcrypt-hashed, cost=10) |
+| `password` | `string` | ✅ | Min 6 chars — bcrypt-hashed server-side |
 
 ```json
 {
@@ -363,7 +241,7 @@ Authenticates an existing user and returns a JWT access token.
 
 #### `POST /user/logout`
 
-Clears the authentication cookie and logs out the current user.
+Clears the authentication cookie.
 
 **Auth Required:** ✅ `isLoggedIn`
 
@@ -390,7 +268,7 @@ Clears the authentication cookie and logs out the current user.
 
 #### `GET /user/me`
 
-Returns the profile of the currently authenticated user. Password is never included.
+Returns the currently authenticated user's profile. Password is never returned.
 
 **Auth Required:** ✅ `isLoggedIn`
 
@@ -422,7 +300,7 @@ Returns the profile of the currently authenticated user. Password is never inclu
 
 #### `GET /user/all-users`
 
-Returns a list of all registered users. **Admin only.**
+Returns all registered users. **Admin only.**
 
 **Auth Required:** ✅ `isLoggedIn` + `ADMIN` role
 
@@ -454,15 +332,317 @@ Returns a list of all registered users. **Admin only.**
 
 ---
 
+### Products
+
+All product endpoints are prefixed with `/products`.
+
+---
+
+#### `GET /products`
+
+Returns all products. No authentication required.
+
+**Response `200 OK`**
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Products fetched successfully",
+  "data": [
+    {
+      "id": "64f1a2b3c4d5e6f7a8b9c0d1",
+      "name": "Keyboard",
+      "price": 49.99,
+      "stock": 25
+    }
+  ]
+}
+```
+
+---
+
+#### `POST /products`
+
+Creates a new product. **Admin only.**
+
+**Auth Required:** ✅ `isLoggedIn` + `ADMIN` role
+
+**Request Body** (`application/json`)
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | `string` | ✅ | Product name |
+| `price` | `number` | ✅ | Non-negative price |
+| `stock` | `integer` | ✅ | Non-negative integer stock count |
+
+```json
+{
+  "name": "Keyboard",
+  "price": 49.99,
+  "stock": 25
+}
+```
+
+**Response `201 Created`**
+```json
+{
+  "success": true,
+  "statusCode": 201,
+  "message": "Product created successfully",
+  "data": {
+    "id": "64f1a2b3c4d5e6f7a8b9c0d1",
+    "name": "Keyboard",
+    "price": 49.99,
+    "stock": 25
+  }
+}
+```
+
+**Error Responses**
+
+| Status | Message |
+|---|---|
+| `401` | No token or invalid/expired token |
+| `403` | Forbidden: admin access only |
+| `422` | Validation error (name, price, or stock) |
+
+---
+
+#### `PATCH /products/:id`
+
+Partially updates a product. **Admin only.** At least one field required.
+
+**Auth Required:** ✅ `isLoggedIn` + `ADMIN` role
+
+**URL Params**
+
+| Param | Description |
+|---|---|
+| `id` | MongoDB ObjectId of the product |
+
+**Request Body** (`application/json`) — all fields optional, at least one required
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `string` | New product name (non-empty) |
+| `price` | `number` | New price (≥ 0) |
+| `stock` | `integer` | New stock count (≥ 0) |
+
+**Response `200 OK`**
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Product updated successfully",
+  "data": {
+    "id": "64f1a2b3c4d5e6f7a8b9c0d1",
+    "name": "Keyboard",
+    "price": 44.99,
+    "stock": 30
+  }
+}
+```
+
+**Error Responses**
+
+| Status | Message |
+|---|---|
+| `400` | Invalid product id |
+| `401` | No token or invalid/expired token |
+| `403` | Forbidden: admin access only |
+| `404` | Product not found |
+| `422` | At least one product field is required |
+
+---
+
+### Orders
+
+All order endpoints are prefixed with `/orders`.
+
+> **Idempotency-Key** — every mutating order request **must** include this header to prevent duplicate order creation on network retries.
+
+---
+
+#### `POST /orders`
+
+Places a new order. Atomically decrements product stock, computes the
+server-side total, and persists the order inside a single MongoDB transaction.
+
+**Auth Required:** ✅ `isLoggedIn`
+
+**Required Headers**
+
+| Header | Type | Description |
+|---|---|---|
+| `Authorization` | `string` | `Bearer <token>` (or use cookie) |
+| `Idempotency-Key` | `string` | Client-generated unique key (UUID recommended). Max 128 chars. Same key + same user = replayed response. |
+
+**Request Body** (`application/json`)
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `items` | `array` | ✅ | Non-empty list of order line items |
+| `items[].productId` | `string` | ✅ | Valid MongoDB ObjectId of the product |
+| `items[].quantity` | `integer` | ✅ | Positive integer (min: 1) |
+
+> **Never send `price`** — any `items[].price` field in the request body is rejected with `422`. Price is always fetched from the database.
+
+```json
+{
+  "items": [
+    { "productId": "64f1a2b3c4d5e6f7a8b9c0d1", "quantity": 2 },
+    { "productId": "64f1a2b3c4d5e6f7a8b9c0d2", "quantity": 1 }
+  ]
+}
+```
+
+**Response `201 Created`**
+
+```json
+{
+  "success": true,
+  "statusCode": 201,
+  "message": "Order placed successfully",
+  "data": {
+    "orderId": "68f7c1a2b3d4e5f6a7b8c9d0",
+    "status": "confirmed",
+    "totalAmount": 149.97,
+    "items": [
+      {
+        "productId": "64f1a2b3c4d5e6f7a8b9c0d1",
+        "productName": "Keyboard",
+        "quantity": 2,
+        "priceAtPurchase": 49.99,
+        "subtotal": 99.98
+      },
+      {
+        "productId": "64f1a2b3c4d5e6f7a8b9c0d2",
+        "productName": "Mouse",
+        "quantity": 1,
+        "priceAtPurchase": 49.99,
+        "subtotal": 49.99
+      }
+    ],
+    "createdAt": "2026-10-07T15:00:00.000Z"
+  }
+}
+```
+
+**On duplicate request (same `Idempotency-Key` + same user)**
+
+Returns the **exact same** `201` response body as the original request — no new order is created.
+
+**Error Responses**
+
+| Status | Condition | Message example |
+|---|---|---|
+| `400` | `Idempotency-Key` header missing | `Idempotency-Key header is required to prevent duplicate orders` |
+| `400` | Key exceeds 128 characters | `Idempotency-Key must not exceed 128 characters` |
+| `401` | Missing or invalid token | `No Token Found, Unauthorized request` |
+| `404` | `productId` does not exist in DB | `Product not found: <id>` |
+| `409` | Product exists but stock < quantity | `Insufficient stock for "<name>" — requested: 5, available: 2` |
+| `422` | Body validation failure | Field-level errors in `errors` array |
+
+---
+
+#### How Idempotency Works
+
+```
+First request (new key)
+  → Check DB: key not found
+  → Run transaction
+  → Save key + response in DB
+  → Return 201
+
+Retry / duplicate (same key, same user)
+  → Check DB: key found
+  → Return stored 201 immediately — no DB writes, no stock change
+
+Race condition (two requests arrive simultaneously with the same key)
+  → Both pass the pre-transaction check (key not yet in DB)
+  → Transaction 1 commits and saves the key
+  → Transaction 2 hits the unique-index constraint (code 11000)
+     → aborts its transaction (stock rollback)
+     → reads the winner's stored response
+     → replays it
+```
+
+> Keys automatically expire after **24 hours** via MongoDB's TTL index — no manual cleanup needed.
+
+---
+
+#### Order Processing Algorithm
+
+```
+POST /orders
+      │
+      ▼
+1.  isLoggedIn — verify JWT → attach req.user
+      │
+      ▼
+2.  Validate body (express-validator)
+    • items non-empty array
+    • items[].productId = valid ObjectId
+    • items[].quantity = integer ≥ 1
+    • items[].price = REJECTED (422)
+      │
+      ▼
+3.  Check Idempotency-Key header
+    • Missing / too long → 400
+      │
+      ▼
+4.  IdempotencyKey.findOne({ key, userId })
+    • HIT  → replay stored response (exit early)
+    • MISS → continue
+      │
+      ▼
+5.  normalizeItems()
+    • Merge duplicate productIds — sum their quantities
+      │
+      ▼
+6.  mongoose.startSession() → startTransaction()
+      │
+      ├─ for each normalized item (sequential):
+      │       Product.findOneAndUpdate(
+      │         { _id, stock: { $gte: quantity } },  ← atomic guard
+      │         { $inc: { stock: -quantity } },
+      │         { new: true, session }
+      │       )
+      │       null? → follow-up findById:
+      │               still null → 404
+      │               found     → 409 Insufficient stock
+      │       ok    → collect { priceAtPurchase, subtotal }
+      │
+      ├─ totalAmount = Σ(DB_price × quantity)   ← server-side only
+      │
+      ├─ orderId = new ObjectId()               ← pre-allocated
+      │
+      ├─ OrderItem.insertMany([...], { session })
+      │
+      ├─ Order.create([{ _id: orderId, ... }], { session })
+      │
+      ├─ IdempotencyKey.create([{ key, response, expiresAt }], { session })
+      │   └─ unique(key,userId) — race-condition last line of defence
+      │
+      └─ commitTransaction()
+           │ on any error → abortTransaction() → endSession()
+           │ code 11000   → replay winning response
+      │
+      ▼
+7.  Return 201 with order details
+```
+
+---
+
 ## Middleware Reference
 
 | Middleware | File | Description |
 |---|---|---|
-| `isLoggedIn` | `auth.middleware.js` | Verifies JWT from cookie or `Authorization: Bearer` header; attaches `req.user` |
-| `authorizeRoles(...roles)` | `rbac.middleware.js` | Checks `req.user.role` against the allowed roles list |
-| `validate` | `validate.middleware.js` | Runs `express-validator` results; returns `422` with field-level errors on failure |
-| `errorHandler` | `errorHandler.middleware.js` | Global error handler; formats all thrown `ApiError` instances into JSON |
-| `logger` | `logger.middleware.js` | Request logging |
+| `isLoggedIn` | `auth.middleware.js` | Verifies JWT from `accessToken` cookie or `Authorization: Bearer` header; attaches `req.user` |
+| `authorizeRoles(...roles)` | `rbac.middleware.js` | Checks `req.user.role` against the allowed roles list; throws `403` if not permitted |
+| `validate` | `validate.middleware.js` | Runs `express-validator` result; returns `422` with per-field `{field, message}` array on failure |
+| `errorHandler` | `errorHandler.middleware.js` | Global error handler — formats thrown `ApiError` into `{statusCode, message, errors, success}` JSON |
+| `logger` | `logger.middleware.js` | Coloured dev-mode request logger (method, status, path, duration); silent in production |
 
 ---
 
@@ -475,12 +655,10 @@ Returns a list of all registered users. **Admin only.**
 | `_id` | `ObjectId` | Auto-generated | — |
 | `username` | `String` | Required, Unique | — |
 | `email` | `String` | Required, Unique | — |
-| `password` | `String` | Required, bcrypt-hashed | — |
+| `password` | `String` | Required, bcrypt-hashed (never returned) | — |
 | `role` | `String` | `enum: ["user", "admin"]` | `"user"` |
 | `createdAt` | `Date` | Auto (timestamps) | — |
 | `updatedAt` | `Date` | Auto (timestamps) | — |
-
-> Password is **never** returned in API responses.
 
 ---
 
@@ -488,20 +666,60 @@ Returns a list of all registered users. **Admin only.**
 
 | Field | Type | Constraints | Default |
 |---|---|---|---|
-| `_id` | `ObjectId` | Auto-generated; exposed as `id` in product responses | — |
+| `_id` | `ObjectId` | Auto-generated; exposed as `id` in responses | — |
 | `name` | `String` | Required, trimmed | — |
-| `price` | `Number` | Required, minimum `0` | — |
-| `stock` | `Number` | Required, integer, minimum `0` | — |
+| `price` | `Number` | Required, min `0` | — |
+| `stock` | `Number` | Required, integer, min `0` | — |
 | `createdAt` | `Date` | Auto (timestamps) | — |
 | `updatedAt` | `Date` | Auto (timestamps) | — |
 
-### Upcoming Models *(scaffolded, not yet implemented)*
+---
 
-| Model | File |
-|---|---|
-| `Order` | `models/Order.js` |
-| `OrderItem` | `models/OrderItem.js` |
-| `IdempotencyKey` | `models/IdempotencyKey.js` |
+### Order
+
+| Field | Type | Constraints | Default |
+|---|---|---|---|
+| `_id` | `ObjectId` | Auto-generated (pre-allocated before items) | — |
+| `user` | `ObjectId` | Ref → `User`, Required, indexed | — |
+| `items` | `ObjectId[]` | Refs → `OrderItem` | `[]` |
+| `totalAmount` | `Number` | Required, min `0`, server-computed | — |
+| `status` | `String` | `enum: ["confirmed", "cancelled"]` | `"confirmed"` |
+| `createdAt` | `Date` | Auto (timestamps) | — |
+| `updatedAt` | `Date` | Auto (timestamps) | — |
+
+---
+
+### OrderItem
+
+| Field | Type | Constraints | Default |
+|---|---|---|---|
+| `_id` | `ObjectId` | Auto-generated | — |
+| `order` | `ObjectId` | Ref → `Order`, Required, indexed | — |
+| `product` | `ObjectId` | Ref → `Product`, Required | — |
+| `quantity` | `Number` | Required, integer, min `1` | — |
+| `priceAtPurchase` | `Number` | Required, min `0` — **snapshot** of `Product.price` at order time | — |
+| `createdAt` | `Date` | Auto (timestamps) | — |
+| `updatedAt` | `Date` | Auto (timestamps) | — |
+
+> `priceAtPurchase` is a price snapshot — future changes to `Product.price` never alter historical order totals.
+
+---
+
+### IdempotencyKey
+
+| Field | Type | Constraints | Notes |
+|---|---|---|---|
+| `_id` | `ObjectId` | Auto-generated | — |
+| `key` | `String` | Required | Raw header value from client |
+| `userId` | `ObjectId` | Ref → `User`, Required | Scopes key per user |
+| `statusCode` | `Number` | Required | HTTP status of original response |
+| `response` | `Mixed` | Required | Full response body for replay |
+| `expiresAt` | `Date` | Required, TTL index | Auto-deleted by MongoDB at this time |
+| `createdAt` | `Date` | Auto (timestamps) | — |
+
+**Indexes:**
+- Compound unique index `{ key: 1, userId: 1 }` — prevents duplicate saves, acts as race-condition guard
+- TTL index `{ expiresAt: 1 }` with `expireAfterSeconds: 0` — automatic 24 h expiry
 
 ---
 
@@ -511,17 +729,20 @@ Returns a list of all registered users. **Admin only.**
 # Install dependencies
 npm install
 
-# Development (nodemon hot-reload)
+# Start with hot-reload (development)
 npm run dev
 ```
 
-Default port: **`8000`** (configurable via the `PORT` env variable).
+Default port: **`8000`** — configurable via the `PORT` environment variable.
 
 ### Required Environment Variables
 
 | Variable | Description |
 |---|---|
 | `PORT` | Server port (default: `8000`) |
-| `MONGO_URI` | MongoDB connection string |
+| `MONGO_URI` | MongoDB connection string (replica set required for transactions) |
 | `JWT_SECRET` | Secret key for signing JWTs |
-| `NODE_ENV` | `development` or `production` (affects cookie `secure` and `sameSite` flags) |
+| `NODE_ENV` | `development` or `production` (affects cookie `secure` / `sameSite` flags and request logging) |
+| `MONGO_RETRY_DELAY_MS` | ms to wait between MongoDB reconnect attempts (default: `5000`) |
+
+> **Transactions require a MongoDB replica set.** A standalone `mongod` instance does not support multi-document transactions. Use a replica set locally or MongoDB Atlas.
