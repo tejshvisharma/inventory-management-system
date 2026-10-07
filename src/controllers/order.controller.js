@@ -229,3 +229,63 @@ export const createOrder = asyncHandler(async (req, res) => {
     session.endSession();
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/orders/:id
+// ─────────────────────────────────────────────────────────────────────────────
+export const getOrderById = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  // ── 1. Validate the route param is a well-formed ObjectId ────────────────
+  // Reject early so MongoDB never receives a malformed query.
+  if (!mongoose.isValidObjectId(id)) {
+    throw new ApiError(400, "Invalid order id");
+  }
+
+  // ── 2. Ownership-enforcing compound query ─────────────────────────────────
+  // Both conditions must match simultaneously in the SAME find call.
+  //
+  //   { _id: id, user: req.user._id }
+  //
+  // This means:
+  //   • If the order doesn't exist            → null → 404
+  //   • If the order belongs to someone else  → null → 404
+  //
+  // The caller receives an identical 404 in both cases — no information
+  // leakage about whether the order ID is valid for another user.
+  const order = await Order.findOne({
+    _id: id,
+    user: req.user._id,
+  }).populate({
+    path: "items",
+    select: "product quantity priceAtPurchase -_id",
+    populate: {
+      path: "product",
+      select: "name price -_id",
+    },
+  });
+
+  if (!order) {
+    throw new ApiError(404, "Order not found");
+  }
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        orderId: order._id,
+        status: order.status,
+        totalAmount: order.totalAmount,
+        items: order.items.map((item) => ({
+          productName: item.product?.name,
+          quantity: item.quantity,
+          priceAtPurchase: item.priceAtPurchase,
+          subtotal: item.priceAtPurchase * item.quantity,
+        })),
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+      },
+      "Order fetched successfully",
+    ),
+  );
+});

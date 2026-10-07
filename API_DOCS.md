@@ -545,6 +545,77 @@ Returns the **exact same** `201` response body as the original request — no ne
 
 ---
 
+#### `GET /orders/:id`
+
+Fetches a single order by ID. **Ownership is enforced at the database level** — a user can only retrieve their own orders.
+
+**Auth Required:** ✅ `isLoggedIn`
+
+**URL Params**
+
+| Param | Description |
+|---|---|
+| `id` | MongoDB ObjectId of the order to retrieve |
+
+**How ownership is enforced**
+
+The query is **not** a simple `Order.findById(id)`. It uses a compound filter:
+
+```js
+Order.findOne({ _id: id, user: req.user._id })
+```
+
+Both conditions must match in the same DB call. This means:
+
+| Scenario | DB result | Response |
+|---|---|---|
+| Order exists and belongs to the authenticated user | Document returned | `200 OK` |
+| Order doesn't exist at all | `null` | `404 Not Found` |
+| Order exists but belongs to a different user | `null` | `404 Not Found` |
+
+The last two cases are **intentionally identical** — no information is leaked about whether the order ID belongs to another user.
+
+**Response `200 OK`**
+
+```json
+{
+  "success": true,
+  "statusCode": 200,
+  "message": "Order fetched successfully",
+  "data": {
+    "orderId": "68f7c1a2b3d4e5f6a7b8c9d0",
+    "status": "confirmed",
+    "totalAmount": 149.97,
+    "items": [
+      {
+        "productName": "Keyboard",
+        "quantity": 2,
+        "priceAtPurchase": 49.99,
+        "subtotal": 99.98
+      },
+      {
+        "productName": "Mouse",
+        "quantity": 1,
+        "priceAtPurchase": 49.99,
+        "subtotal": 49.99
+      }
+    ],
+    "createdAt": "2026-10-07T15:00:00.000Z",
+    "updatedAt": "2026-10-07T15:00:00.000Z"
+  }
+}
+```
+
+**Error Responses**
+
+| Status | Condition |
+|---|---|
+| `400` | `id` is not a valid MongoDB ObjectId |
+| `401` | Missing or invalid token |
+| `404` | Order not found **or** order belongs to a different user |
+
+---
+
 #### How Idempotency Works
 
 ```
