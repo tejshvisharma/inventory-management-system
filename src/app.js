@@ -18,11 +18,13 @@ app.use(cookieParser());
 import healthCheckRouter from "./routes/health.routes.js";
 import userRouter from "./routes/user.routes.js";
 import productRouter from "./routes/product.routes.js";
+import orderRouter from "./routes/order.routes.js";
 
-// routes the related routes :
+// mount routes
 app.use("/api/v1/health", healthCheckRouter);
 app.use("/api/v1/user", userRouter);
 app.use("/api/v1/products", productRouter);
+app.use("/api/v1/orders", orderRouter);
 
 app.use((req, res, next) => {
   return next(
