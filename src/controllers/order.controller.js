@@ -208,6 +208,17 @@ export const createOrder = asyncHandler(async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
 
+    // MongoDB can reject the losing transaction with a write conflict before
+    // the conditional stock update gets a chance to observe the committed
+    // winner. Report that contention as the same conflict clients receive
+    // when stock is already insufficient.
+    if (error.code === 112) {
+      throw new ApiError(
+        409,
+        "Insufficient stock due to a concurrent order",
+      );
+    }
+
     // ── Race-condition guard ───────────────────────────────────────────────
     // Two requests with the same idempotency key both passed Step 2 (the
     // pre-transaction check) and raced into the transaction.  The duplicate-key
